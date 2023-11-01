@@ -1,0 +1,147 @@
+import numpy as np # linear algebra
+import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
+import random
+import seaborn as sns
+import matplotlib.pyplot as plt
+
+# Machine Learning & nltk library
+import nltk
+from nltk.tokenize import sent_tokenize, word_tokenize
+from nltk.classify.scikitlearn import SklearnClassifier
+from nltk.classify import ClassifierI
+from sklearn.naive_bayes import MultinomialNB, GaussianNB, BernoulliNB
+from sklearn.linear_model import LogisticRegression, SGDClassifier
+from sklearn.svm import SVC, LinearSVC
+from sklearn.metrics import confusion_matrix
+from statistics import mode
+import pickle
+df = pd.read_csv("/kaggle/input/sms-spam-collection-dataset/spam.csv", encoding='latin-1')
+df.dropna(how="any", inplace=True, axis=1)
+df.columns = ['label', 'message']
+df.head()
+print(df.shape)
+print(df['label'].value_counts())
+df['label'].value_counts().plot(kind='bar')
+# Make a bag of word and count the frequncy of the word 
+df = df.reset_index()
+all_words = []
+for index, row in df.iterrows():
+    for word in word_tokenize(row['message']):
+        all_words.append(word.lower())
+all_words = nltk.FreqDist(all_words)
+all_words.most_common(50)
+# choose most frequent 3,000 words
+word_features = list(all_words.keys())[:3000]
+# Make a documents that contains tokenized words and labels
+documents = []   
+for index, row in df.iterrows():
+    documents.append((word_tokenize(row['message']),row['label']))
+# Make a feature set that shows which word was in the word_features
+def find_features(document):
+    words = set(document)
+    features = {}
+    for w in word_features: # 3,000 frequent words
+        features[w] = (w in words)
+    return features
+
+featuresets = [(find_features(message), label) for (message, label) in documents]
+# shuffle with the same seed
+random.Random(4).shuffle(featuresets)
+# divide training set and test set
+training_set = featuresets[:5000] 
+testing_set =  featuresets[5000:]
+# sklearn.naive_bayes : NaiveBayesClassifier, MultinomialNB,BernoulliNB
+classifier = nltk.NaiveBayesClassifier.train(training_set)
+MNB_classifier = SklearnClassifier(MultinomialNB())
+MNB_classifier.train(training_set)
+BernoulliNB = SklearnClassifier(BernoulliNB())
+BernoulliNB.train(training_set)
+
+# sklearn.linear_model : LogisticRegression, SGDClassifier
+LogisticRegression = SklearnClassifier(LogisticRegression())
+LogisticRegression.train(training_set)
+SGDClassifier = SklearnClassifier(SGDClassifier())
+SGDClassifier.train(training_set)
+
+# sklearn.svm : SVC, LinearSVC, NuSVC
+SVC = SklearnClassifier(SVC())
+SVC.train(training_set)
+LinearSVC = SklearnClassifier(LinearSVC())
+LinearSVC.train(training_set)
+# Build a VoteClassifier Class
+class VoteClassifier(ClassifierI):
+    def __init__(self,*classifiers):
+        self._classifiers = classifiers
+        
+    def classify(self, features):
+        votes = []
+        for c in self._classifiers:
+            v = c.classify(features)
+            votes.append(v)
+        return mode(votes)
+        
+    def confidence(self, features):
+        votes = []
+        for c in self._classifiers:
+            v = c.classify(features)
+            votes.append(v)
+        choice_votes = votes.count(mode(votes))
+        confidence_val = choice_votes / len(votes)
+        return confidence_val            
+voted_classifier = VoteClassifier(classifier,
+                                MNB_classifier,
+                                BernoulliNB,
+                                LogisticRegression,
+                                SGDClassifier,
+                                SVC,
+                                LinearSVC)
+
+print("voted_classifier Accuracy percent: ", (nltk.classify.accuracy(voted_classifier, testing_set)*100))
+print("Classification: ", voted_classifier.classify(testing_set[0][0]), 'confidence %', voted_classifier.confidence(testing_set[0][0]) * 100)
+models = [classifier, MNB_classifier, BernoulliNB,LogisticRegression,SGDClassifier,SVC,LinearSVC, voted_classifier]
+models_name = ['classifier', 'MNB_classifier', 'BernoulliNB','LogisticRegression','SGDClassifier','SVC','LinearSVC', 'voted_classifier']
+accuracy_dict = {}
+
+for idx, model in enumerate(models):
+    accuracy_dict[models_name[idx]] = round(nltk.classify.accuracy(model, testing_set)*100,2)
+print(accuracy_dict)
+df = pd.DataFrame(accuracy_dict, index=[0])
+df.plot(kind = 'bar', ylim = [96,100])   
+{'classifier': 97.55, 'MNB_classifier': 97.2, 'BernoulliNB': 97.03, 'LogisticRegression': 98.25, 'SGDClassifier': 96.85, 'SVC': 97.38, 'LinearSVC': 97.73, 'voted_classifier': 98.25}
+<AxesSubplot:>
+#Generate the confusion matrix
+
+models = [classifier,MNB_classifier,BernoulliNB,LogisticRegression,SGDClassifier,SVC,LinearSVC,voted_classifier]
+matrixs = []
+
+for model in models:
+    y_pred  = []
+    y_test = []
+    for sample in testing_set:
+        y_pred.append(model.classify(sample[0]))
+        y_test.append(sample[1])
+    matrixs.append(confusion_matrix(y_test, y_pred))
+group_names = ['True Neg','False Pos','False Neg','True Pos']
+
+fig, axs = plt.subplots(nrows = 3, ncols=3)
+for idx,matrix in enumerate(matrixs):
+
+    group_counts = ['{0:0.0f}'.format(value) for value in
+                matrix.flatten()]
+    group_percentages = ['{0:.2%}'.format(value) for value in
+                         matrix.flatten()/np.sum(matrix)]
+    labels = [f'{v1}\n{v2}\n{v3}' for v1, v2, v3 in
+              zip(group_names,group_counts,group_percentages)]
+    labels = np.asarray(labels).reshape(2,2)
+    sns.heatmap(matrix, annot=labels, fmt='', cmap='Blues', ax = axs[idx//3][idx%3])
+plt.tight_layout()
+# save in the pickle
+save_classifier = open("voted_classifier.pickle", "wb")
+pickle.dump(voted_classifier, save_classifier)
+save_classifier.close()
+classifier_f = open("voted_classifier.pickle", "rb")
+voted_classifier = pickle.load(classifier_f)
+classifier_f.close()
+print("Pickled voted_classifier percent: ", (nltk.classify.accuracy(voted_classifier, testing_set)*100))
+# we check the voted_classifier method, confidence, using the first dataset in training set
+print("Classification: ", voted_classifier.classify(testing_set[1][0]), 'confidence %', voted_classifier.confidence(testing_set[1][0])* 100)
